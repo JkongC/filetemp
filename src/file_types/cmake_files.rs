@@ -1,5 +1,7 @@
 use std::{fmt::Write, str::FromStr};
 
+use crate::program_args::CommandArg;
+
 pub enum TargetType {
     Executable,
     StaticLib,
@@ -43,6 +45,7 @@ impl FromStr for LanguageType {
 
 pub struct CMakeListsFile<'a> {
     cmake_version: &'a str,
+    project_name: &'a str,
     main_language: LanguageType,
     c_standard: Option<i32>,
     cxx_standard: Option<i32>,
@@ -54,6 +57,7 @@ impl<'a> CMakeListsFile<'a> {
     pub fn new() -> Self {
         Self {
             cmake_version: "",
+            project_name: "",
             main_language: LanguageType::CXX,
             c_standard: None,
             cxx_standard: None,
@@ -64,6 +68,11 @@ impl<'a> CMakeListsFile<'a> {
 
     pub fn require_version(&mut self, ver: &'a str) -> &mut Self {
         self.cmake_version = ver;
+        self
+    }
+
+    pub fn set_project_name(&mut self, name: &'a str) -> &mut Self {
+        self.project_name = name;
         self
     }
 
@@ -104,6 +113,8 @@ impl<'a> CMakeListsFile<'a> {
             write!(&mut out, "set(CMAKE_CXX_STANDARD {})\nset(CMAKE_CXX_STANDARD_REQUIRED ON)\n\n", v).unwrap();
         }
 
+        write!(&mut out, "project({})\n\n", self.project_name).unwrap();
+
         match self.target_type {
             TargetType::Executable => {
                 write!(&mut out, "add_executable({})\n\n", self.target_name).unwrap();
@@ -121,4 +132,58 @@ impl<'a> CMakeListsFile<'a> {
 
         out
     }
+}
+
+pub(super) fn process(cmd: &CommandArg) -> Result<String, String> {
+    let mut f: CMakeListsFile = CMakeListsFile::new();
+
+    macro_rules! use_argument {
+        ($name:ident, $func:ident) => {
+            if let Some($name) = cmd.get_arg(stringify!($name)) {
+                f.$func($name);
+            }
+        };
+        ($name:ident, $str_name:literal, $func:ident) => {
+            if let Some($name) = cmd.get_arg(stringify!($str_name)) {
+                f.$func($name);
+            }
+        }
+    }
+
+    macro_rules! use_parsed_argument {
+        ($type:ty, $name:ident, $func:ident, $err: literal) => {
+            if let Some($name) = cmd.get_arg(stringify!($name)) {
+                match $name.parse::<$type>() {
+                    Ok(result) => f.$func(result),
+                    Err(_) => {
+                        return Err(format!($err, $name));
+                    }
+                };
+            }
+        };
+        ($type:ty, $name:ident, $str_name:literal, $func:ident, $err: literal) => {
+            if let Some($name) = cmd.get_arg($str_name) {
+                match $name.parse::<$type>() {
+                    Ok(result) => f.$func(result),
+                    Err(_) => {
+                        return Err(format!($err, $name));
+                    }
+                };
+            }
+        }
+    }
+
+    use_argument!(version, require_version);
+    use_argument!(proj, set_project_name);
+    use_parsed_argument!(i32, cstd, require_c_standard, "Invalid C standard: {}");
+    use_parsed_argument!(i32, cxxstd, require_cxx_standard, "Invalid C++ standard: {}");
+    use_parsed_argument!(LanguageType, ml, "main-lang", set_main_language, "Invalid main language type: {}");
+    use_argument!(tn, "target-name", set_target_name);
+    use_parsed_argument!(TargetType, tt, "target-type", set_target_type, "Invalid target type: {}");
+
+    Ok(f.output_string())
+}
+
+pub(super) fn get_filename() -> &'static str {
+    "CMakeLists.txt"
 }

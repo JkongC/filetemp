@@ -1,63 +1,159 @@
-use std::{collections::{HashMap, VecDeque}, str::FromStr};
+use std::{
+    collections::{HashMap, VecDeque},
+    ops::{Deref, DerefMut},
+};
 
 use crate::file_types::FileType;
 
 const HELP_MESSAGE: &'static str = "\
+filetemp 0.1.0
+
 USAGE:
-    filetemp <FILE_TYPE> [OPTIONS]
+    filetemp <FILE_TYPE> <CMAKE_OPTIONS> [GENERAL_OPTIONS]
 
 FILE_TYPE:
     CMake            Generates CMakeLists.txt
 
-OPTIONS:
-    -version <VER>          Used in \"cmake_minimum_required\"
+CMAKE_OPTIONS:
+    SYNTAX: <--version <VER>> <--proj <NAME>> [...]
 
-    -main-lang <LANG>       Main language of the project, decides whether \"main.c\" or \"main.cpp\" is generated.
+    --version <VER>          Used in \"cmake_minimum_required\"
+
+    --proj <NAME>            Project name
+
+    --main-lang <LANG>       Main language of the project, decides whether \"main.c\" or \"main.cpp\" is generated.
                             [possible values: C, CXX]
                             [default: CXX]
 
-    -cstd <STD>             C standard
+    --cstd <STD>             C standard
 
-    -cxxstd <STD>           C++ standard
+    --cxxstd <STD>           C++ standard
 
-    -proj <NAME>            Project name
-
-    -target-type <TYPE>     Target type
+    --target-type <TYPE>     Target type
                             [possible values: executable, staticlib, sharedlib]
                             [default: executable]
 
-    -target-name <NAME>     Target name
+    --target-name <NAME>     Target name
+
+GENERAL_OPTIONS:
+    SYNTAX: [--show] [--path <PATH>]
+
+    --show                   Show output content to stdout
+
+    --path <PATH>            Path where the file is generated to
 ";
 
 pub enum ArgProcessErr {
     PrintedHelp,
     InvalidArg(String),
-    InvalidFileType(String)
+    InvalidFileType(String),
+    MissingArg(String),
+}
+
+pub struct Arg {
+    name: &'static str,
+    is_flag: bool,
+    is_required: bool,
+    has_default_value: bool,
+    default_value: &'static str,
+}
+
+impl Arg {
+    pub fn new(arg_name: &'static str) -> Self {
+        Self {
+            name: arg_name,
+            is_flag: false,
+            is_required: false,
+            has_default_value: false,
+            default_value: "",
+        }
+    }
+
+    pub fn flag(mut self, f: bool) -> Self {
+        self.is_flag = f;
+        self
+    }
+
+    pub fn required(mut self, req: bool) -> Self {
+        self.is_required = req;
+        self
+    }
+
+    pub fn default_val(mut self, v: &'static str) -> Self {
+        self.default_value = v;
+        self.has_default_value = true;
+        self
+    }
 }
 
 struct ArgGroup {
-    arg: &'static str,
-    has_content: bool
+    definition: Arg,
+    found: bool,
+}
+
+impl Deref for ArgGroup {
+    type Target = Arg;
+
+    fn deref(&self) -> &Arg {
+        &self.definition
+    }
+}
+
+impl DerefMut for ArgGroup {
+    fn deref_mut(&mut self) -> &mut Arg {
+        &mut self.definition
+    }
+}
+
+impl ArgGroup {
+    fn new(arg: Arg) -> Self {
+        Self {
+            definition: arg,
+            found: false,
+        }
+    }
 }
 
 pub struct CommandArg {
     file_type: FileType,
-    cmake_args: Vec<ArgGroup>,
-    arg_map: HashMap<&'static str, String>
+    defined_args: HashMap<FileType, Vec<ArgGroup>>,
+    general_args: Vec<ArgGroup>,
+    arg_map: HashMap<&'static str, String>,
+}
+
+pub struct ArgFileTypeView<'a> {
+    arg_ref: &'a mut CommandArg,
+    ty: FileType,
 }
 
 impl CommandArg {
     pub fn new() -> Self {
-        Self { file_type: FileType::Unknown, cmake_args: Vec::new(), arg_map: HashMap::new() }
+        Self {
+            file_type: FileType::Unknown,
+            defined_args: HashMap::new(),
+            general_args: Vec::new(),
+            arg_map: HashMap::new(),
+        }
     }
 
-    pub fn add_cmake_flag(&mut self, f: &'static str) -> &mut Self {
-        self.cmake_args.push(ArgGroup { arg: f, has_content: false });
-        self
+    pub fn define_file_type(&mut self, ty: FileType) -> ArgFileTypeView<'_> {
+        ArgFileTypeView { arg_ref: self, ty }
     }
 
-    pub fn add_cmake_arg(&mut self, f: &'static str) -> &mut Self {
-        self.cmake_args.push(ArgGroup { arg: f, has_content: true });
+    pub fn add_general_arg(&mut self, arg: Arg) -> &mut Self {
+        self.add_arg(FileType::Unknown, arg)
+    }
+
+    pub fn add_arg(&mut self, file_type: FileType, arg: Arg) -> &mut Self {
+        if let FileType::Unknown = file_type {
+            self.general_args.push(ArgGroup::new(arg));
+        } else {
+            self.defined_args
+                .entry(file_type)
+                .or_default()
+                .push(ArgGroup::new(arg));
+        }
+
         self
     }
 
@@ -69,10 +165,14 @@ impl CommandArg {
         }
     }
 
-    pub fn get_file_type(&self) -> &FileType {
-        &self.file_type
+    pub fn get_flag(&self, key: &str) -> bool {
+        self.arg_map.get(key).is_some()
     }
-    
+
+    pub fn get_file_type(&self) -> FileType {
+        self.file_type
+    }
+
     pub fn process_program_args(&mut self) -> Result<(), ArgProcessErr> {
         let mut a = collect_raw_args();
         if a.is_empty() {
@@ -81,44 +181,43 @@ impl CommandArg {
         }
 
         let file_type_name = a.pop_front().unwrap();
+        match FileType::match_type(&file_type_name) {
+            FileType::Unknown => return Err(ArgProcessErr::InvalidFileType(file_type_name)),
+            ty @ _ => self.file_type = ty,
+        };
 
-        self.process_arg_impl(file_type_name, a)?;
-
-        Ok(())
+        self.process_arg_impl(a)
     }
 
-    fn process_arg_impl(&mut self, file_type_name: String, args: VecDeque<String>) -> Result<(), ArgProcessErr> {
-        let file_type = FileType::match_type(&file_type_name);
-        self.file_type = file_type.clone();
+    fn process_arg_impl(&mut self, args: VecDeque<String>) -> Result<(), ArgProcessErr> {
+        let valid_args = self.defined_args.get_mut(&self.file_type).unwrap();
+        let general_args: &mut Vec<ArgGroup> = &mut self.general_args;
 
-        let valid_arg_groups: &Vec<ArgGroup> = if let FileType::CMake = file_type {
-            &self.cmake_args
-        } else {
-            return Err(ArgProcessErr::InvalidFileType(file_type_name));
-        };
-        
         let mut found_arg = false;
         let mut arg_ref: &'static str = "";
 
         for arg in args.into_iter() {
             if found_arg {
-                self.arg_map.insert(arg_ref, arg);
+                self.arg_map.entry(arg_ref).or_insert(arg);
                 found_arg = false;
             } else {
                 let mut verified = false;
 
-                for valid_arg in valid_arg_groups.iter() {
-                    if verify_arg(&arg, valid_arg.arg) {
-                        if valid_arg.has_content {
-                            arg_ref = &valid_arg.arg;
-                            found_arg = true;
-                        } else {
-                            self.arg_map.insert(valid_arg.arg, String::from_str("").unwrap());
-                        }
-
-                        verified = true;
-                        break;
+                for valid_arg in valid_args.iter_mut().chain(general_args.iter_mut()) {
+                    if !verify_arg(&arg, valid_arg.name) {
+                        continue;
                     }
+
+                    if !valid_arg.is_flag {
+                        arg_ref = &valid_arg.name;
+                        found_arg = true;
+                    } else {
+                        self.arg_map.entry(valid_arg.name).or_insert("".to_string());
+                    }
+
+                    valid_arg.found = true;
+                    verified = true;
+                    break;
                 }
 
                 if !verified {
@@ -127,7 +226,54 @@ impl CommandArg {
             }
         }
 
-        Ok(())
+        self.check_if_required_args_exist()
+    }
+
+    fn check_if_required_args_exist(&mut self) -> Result<(), ArgProcessErr> {
+        let valid_args = self.defined_args.get_mut(&self.file_type).unwrap();
+        let general_args: &mut Vec<ArgGroup> = &mut self.general_args;
+        let all_valid_args = valid_args.iter_mut().chain(general_args.iter_mut());
+
+        let mut missing_args = false;
+        let mut missing_msg = String::new();
+        for valid_arg in all_valid_args {
+            if valid_arg.found {
+                continue;
+            }
+
+            if valid_arg.is_required {
+                if missing_args {
+                    missing_msg.push_str(", ");
+                }
+
+                missing_msg.push_str(valid_arg.name);
+                missing_args = true;
+
+                continue;
+            }
+
+            if valid_arg.has_default_value {
+                self.arg_map
+                    .insert(valid_arg.name, valid_arg.default_value.to_string());
+            }
+        }
+
+        if missing_args {
+            Err(ArgProcessErr::MissingArg(missing_msg))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl<'a> ArgFileTypeView<'a> {
+    pub fn finish(&mut self) -> &'_ mut CommandArg {
+        self.arg_ref
+    }
+
+    pub fn add_arg(&mut self, arg: Arg) -> &mut Self {
+        self.arg_ref.add_arg(self.ty, arg);
+        self
     }
 }
 
@@ -144,4 +290,3 @@ fn collect_raw_args() -> VecDeque<String> {
     r.pop_front();
     r
 }
-

@@ -1,6 +1,8 @@
-use std::{str::FromStr};
+use std::str::FromStr;
 
-#[derive(Clone)]
+use crate::{program_args::CommandArg};
+
+#[derive(Clone, Copy, Eq, PartialEq, Hash)]
 pub enum FileType {
     CMake,
     Unknown
@@ -25,3 +27,11 @@ impl FromStr for FileType {
 }
 
 pub mod cmake_files;
+
+pub fn process_cmake(cmd: &CommandArg) -> Result<String, String> {
+    cmake_files::process(cmd)
+}
+
+pub fn get_cmake_filename() -> &'static str {
+    cmake_files::get_filename()
+}
