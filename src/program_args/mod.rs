@@ -33,7 +33,7 @@ CMAKE_OPTIONS:
                             [possible values: executable, staticlib, sharedlib]
                             [default: executable]
 
-    --target-name <NAME>     Target name
+    --target-name <NAME>     Target name, use project name if not specified.
 
 GENERAL_OPTIONS:
     SYNTAX: [--show] [--path <PATH>]

@@ -62,7 +62,7 @@ impl<'a> CMakeListsFile<'a> {
             c_standard: None,
             cxx_standard: None,
             target_type: TargetType::Executable,
-            target_name: "foo",
+            target_name: "",
         }
     }
 
@@ -178,8 +178,13 @@ pub(super) fn process(cmd: &CommandArg) -> Result<String, String> {
     use_parsed_argument!(i32, cstd, require_c_standard, "Invalid C standard: {}");
     use_parsed_argument!(i32, cxxstd, require_cxx_standard, "Invalid C++ standard: {}");
     use_parsed_argument!(LanguageType, ml, "main-lang", set_main_language, "Invalid main language type: {}");
-    use_argument!(tn, "target-name", set_target_name);
     use_parsed_argument!(TargetType, tt, "target-type", set_target_type, "Invalid target type: {}");
+
+    if let Some(tn) = cmd.get_arg("target-name") {
+        f.set_target_name(tn);
+    } else {
+        f.set_target_name(cmd.get_arg("proj").unwrap());
+    }
 
     Ok(f.output_string())
 }

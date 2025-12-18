@@ -1,14 +1,26 @@
-use std::{fs, io, path::Path};
+use cache_dir::get_data_dir;
+use std::{
+    fs::{self, File},
+    io,
+    path::{Path, PathBuf},
+};
 
-use crate::{file_types::{FileType, get_cmake_filename, process_cmake}, program_args::{Arg, ArgProcessErr, CommandArg}};
+use crate::{
+    config_file::{ArgCache, ConfigReader},
+    file_types::{FileType, get_cmake_filename, process_cmake},
+    program_args::{Arg, ArgProcessErr, CommandArg},
+};
 
+mod config_file;
 mod file_types;
 mod program_args;
 
 fn main() {
+    // Define usable arguments.
     let mut cmd = CommandArg::new();
     define_args(&mut cmd);
 
+    // Process actual arguments, check their validity.
     match cmd.process_program_args() {
         Err(ref e) => {
             match e {
@@ -18,11 +30,34 @@ fn main() {
                 _ => {}
             };
             return;
-        },
+        }
         Ok(_) => {}
     };
 
     let file_type = cmd.get_file_type();
+    let mut arg_caches: Option<ConfigReader> = None;
+
+    if cmd.get_arg("use").is_some() || cmd.get_arg("save-as").is_some() {
+        let config_file_path = if let Ok(path) = get_data_dir() {
+            path.as_path().to_owned()
+        } else {
+            Path::new("filetemp.cache").to_path_buf()
+        };
+
+        let config_file = if let Ok(f) = File::open(config_file_path) {
+            f
+        } else {
+            println!("Failed to open config cache file.");
+            return;
+        };
+
+        arg_caches = Some(ConfigReader::new(file_type, config_file));
+    }
+
+    // Do nothing if no output is required.
+    if !cmd.get_flag("show") && !cmd.get_arg("path").is_some() {
+        return;
+    }
 
     let process_result = if let FileType::CMake = file_type {
         process_cmake(&cmd)
@@ -44,7 +79,9 @@ fn main() {
 
     let path = match cmd.get_arg("path") {
         Some(p) => p,
-        None => { return; }
+        None => {
+            return;
+        }
     };
 
     if let Err(_) = write_to_file(file_type, path, &result_str) {
@@ -67,14 +104,16 @@ fn write_to_file(ty: FileType, path: &str, content: &str) -> io::Result<()> {
 
 fn define_args(cmd: &mut CommandArg) {
     cmd.define_file_type(FileType::CMake)
-            .add_arg(Arg::new("version").required(true))
-            .add_arg(Arg::new("proj").required(true))
-            .add_arg(Arg::new("main-lang").default_val("cxx"))
-            .add_arg(Arg::new("cstd"))
-            .add_arg(Arg::new("cxxstd"))
-            .add_arg(Arg::new("target-type"))
-            .add_arg(Arg::new("target-name"))
-            .finish()
+        .add_arg(Arg::new("version").required(true))
+        .add_arg(Arg::new("proj").required(true))
+        .add_arg(Arg::new("main-lang").default_val("cxx"))
+        .add_arg(Arg::new("cstd"))
+        .add_arg(Arg::new("cxxstd"))
+        .add_arg(Arg::new("target-type"))
+        .add_arg(Arg::new("target-name"))
+        .finish()
         .add_general_arg(Arg::new("path"))
-        .add_general_arg(Arg::new("show").flag(true));
+        .add_general_arg(Arg::new("show").flag(true))
+        .add_general_arg(Arg::new("save-as"))
+        .add_general_arg(Arg::new("use"));
 }
