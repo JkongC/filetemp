@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 cache-dir = "0.1"
+line-ending = "1.5.1"

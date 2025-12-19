@@ -43,6 +43,11 @@ GENERAL_OPTIONS:
     --path <PATH>            Path where the file is generated to
 ";
 
+pub struct ArgPair<'a> {
+    pub arg: &'static str,
+    pub content: &'a str,
+}
+
 pub enum ArgProcessErr {
     PrintedHelp,
     InvalidArg(String),
@@ -51,7 +56,7 @@ pub enum ArgProcessErr {
 }
 
 pub struct Arg {
-    name: &'static str,
+    pub name: &'static str,
     is_flag: bool,
     is_required: bool,
     has_default_value: bool,
@@ -86,7 +91,7 @@ impl Arg {
     }
 }
 
-struct ArgGroup {
+pub struct ArgGroup {
     definition: Arg,
     found: bool,
 }
@@ -126,6 +131,20 @@ pub struct ArgFileTypeView<'a> {
     ty: FileType,
 }
 
+impl<'a> Deref for ArgFileTypeView<'a> {
+    type Target = CommandArg;
+
+    fn deref(&self) -> &Self::Target {
+        self.arg_ref
+    }
+}
+
+impl<'a> DerefMut for ArgFileTypeView<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.arg_ref
+    }
+}
+
 impl CommandArg {
     pub fn new() -> Self {
         Self {
@@ -140,11 +159,11 @@ impl CommandArg {
         ArgFileTypeView { arg_ref: self, ty }
     }
 
-    pub fn add_general_arg(&mut self, arg: Arg) -> &mut Self {
-        self.add_arg(FileType::Unknown, arg)
+    pub fn add_general_arg_def(&mut self, arg: Arg) -> &mut Self {
+        self.add_arg_def(FileType::Unknown, arg)
     }
 
-    pub fn add_arg(&mut self, file_type: FileType, arg: Arg) -> &mut Self {
+    pub fn add_arg_def(&mut self, file_type: FileType, arg: Arg) -> &mut Self {
         if let FileType::Unknown = file_type {
             self.general_args.push(ArgGroup::new(arg));
         } else {
@@ -187,6 +206,26 @@ impl CommandArg {
         };
 
         self.process_arg_impl(a)
+    }
+
+    pub fn query_valid_args(&mut self) -> impl Iterator<Item = &ArgGroup> + Clone {
+        let ty_args = self.defined_args.entry(self.file_type).or_default().iter();
+        let gn_args = self.general_args.iter();
+
+        ty_args.chain(gn_args)
+    }
+
+    pub fn insert_arg_if_absent(&mut self, arg: &'static str, content: String) {
+        self.arg_map.entry(arg).or_insert(content);
+    }
+
+    pub fn extract_args(&self) -> Vec<ArgPair<'_>> {
+        let mut args: Vec<ArgPair> = Vec::new();
+        for (&arg, content) in self.arg_map.iter() {
+            args.push(ArgPair { arg, content });
+        }
+
+        args
     }
 
     fn process_arg_impl(&mut self, args: VecDeque<String>) -> Result<(), ArgProcessErr> {
@@ -267,12 +306,8 @@ impl CommandArg {
 }
 
 impl<'a> ArgFileTypeView<'a> {
-    pub fn finish(&mut self) -> &'_ mut CommandArg {
-        self.arg_ref
-    }
-
-    pub fn add_arg(&mut self, arg: Arg) -> &mut Self {
-        self.arg_ref.add_arg(self.ty, arg);
+    pub fn add_arg_def(&mut self, arg: Arg) -> &mut Self {
+        self.arg_ref.add_arg_def(self.ty, arg);
         self
     }
 }

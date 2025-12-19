@@ -1,10 +1,17 @@
-use std::io::Read;
+use std::{fmt::Write, io::{Read, Write as _}, ops::{Deref, DerefMut}};
 
-use crate::file_types::FileType;
+use line_ending::LineEnding;
 
-pub struct ArgPair<'a> {
-    arg: &'static str,
-    content: &'a str,
+use crate::{file_types::FileType, program_args::ArgPair};
+
+static mut CACHE_STR: Option<&'static str> = None;
+
+/// Return the whole cache string slice.
+/// UNSAFE, always ensure CACHE_STR is already initialized.
+fn get_cache_str() -> &'static str {
+    unsafe {
+        CACHE_STR.unwrap()
+    }
 }
 
 pub struct ArgCache<'a> {
@@ -23,52 +30,80 @@ impl ArgCache<'_> {
     }
 }
 
+pub struct ArgCacheCollection<'a> {
+    caches: Vec<ArgCache<'a>>,
+}
+
+impl<'a> ArgCacheCollection<'a> {
+    pub fn new(caches: Vec<ArgCache<'a>>) -> Self {
+        Self { caches }
+    }
+
+    pub fn new_empty() -> Self {
+        Self { caches: Vec::new() }
+    }
+}
+
+impl<'a> Deref for ArgCacheCollection<'a> {
+    type Target = Vec<ArgCache<'a>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.caches
+    }
+}
+
+impl<'a> DerefMut for ArgCacheCollection<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.caches
+    }
+}
+
 pub struct ConfigReader {
-    whole_cache: String,
-    target_file_type: FileType,
     file_handle: std::fs::File
 }
 
 enum LineResult<'a> {
     CacheName(&'a str),
+    FileTy(FileType),
     ArgItem(ArgPair<'a>),
     ParseError(String),
 }
 
 impl ConfigReader {
-    pub fn new(target_file_type: FileType, config_file: std::fs::File) -> Self {
+    pub fn new(config_file: std::fs::File) -> Self {
         Self {
-            whole_cache: String::from(""),
-            file_handle: config_file,
-            target_file_type
+            file_handle: config_file
         }
     }
 
-    pub fn read_from_config<I>(
+    pub fn read_from_config<'b, I>(
         &mut self,
-        valid_args: I,
-        file: &mut std::fs::File,
-    ) -> Result<Vec<ArgCache<'_>>, String>
+        valid_args: I
+    ) -> Result<Vec<ArgCache<'b>>, String>
     where
-        I: Iterator<Item = &'static str> + Clone,
+        I: Iterator<Item = &'static str> + Clone
     {
         let mut caches: Vec<ArgCache> = Vec::new();
 
-        if let Err(_) = file.read_to_string(&mut self.whole_cache) {
+        let mut temp_str = String::new();
+        if let Err(_) = self.file_handle.read_to_string(&mut temp_str) {
             return Err(String::from("Failed to read from config cache file."));
+        }
+        unsafe {
+            CACHE_STR = Some(Box::leak(temp_str.into_boxed_str()));
         }
 
         let mut current_cache = ArgCache::new();
         let mut parsing_cache = false;
 
-        for (idx, line) in self.whole_cache.lines().enumerate() {
+        for (idx, line) in get_cache_str().lines().enumerate() {
             if line.is_empty() && parsing_cache {
                 if let FileType::Unknown = current_cache.file_type {
                     return Err(format!(
                         "Argument cache parse error: File type not specified for cache \"{}\"",
                         current_cache.cache_name
                     ));
-                } else if self.target_file_type == current_cache.file_type {
+                } else {
                     caches.push(current_cache);
                     current_cache = ArgCache::new();
                     parsing_cache = false;
@@ -83,23 +118,27 @@ impl ConfigReader {
                         parsing_cache = true;
                     }
                     LineResult::ArgItem(arg) => {
-                        if !parsing_cache {
+                        if parsing_cache {
+                            current_cache.args.push(ArgPair {
+                                arg: arg.arg,
+                                content: arg.content,
+                            });
+                        } else {
                             return Err(format!(
                                 "Invalid content in config cache file: \"{}\"",
                                 line
                             ));
-                        } else if arg.arg == "file_type" {
-                            match FileType::match_type(arg.content) {
-                                FileType::Unknown => {
-                                    return Err(format!(
-                                        "Argument cache parse error: Invalid file type \"{}\" for cache \"{}\"",
-                                        arg.content, idx
-                                    ));
-                                }
-                                ty @ _ => current_cache.file_type = ty,
-                            }
                         }
                     }
+                    LineResult::FileTy(ty) => match ty {
+                        FileType::Unknown => {
+                            return Err(format!(
+                                "Argument cache parse error: Invalid file type for cache \"{}\"",
+                                current_cache.cache_name
+                            ));
+                        }
+                        _ => current_cache.file_type = ty,
+                    },
                 }
             }
         }
@@ -110,7 +149,7 @@ impl ConfigReader {
                     "Argument cache parse error: File type not specified for cache \"{}\"",
                     current_cache.cache_name
                 ));
-            } else if self.target_file_type == current_cache.file_type {
+            } else {
                 caches.push(current_cache);
             }
         }
@@ -173,6 +212,10 @@ where
             }
         }
 
+        if arg == "file_type" {
+            return LineResult::FileTy(FileType::match_type(content));
+        }
+
         LineResult::ParseError(format!(
             "Argument parse error: Having invalid argument name \"{}\" at line {}",
             arg, line_num
@@ -187,5 +230,37 @@ where
         } else {
             LineResult::CacheName(&line[cache_name_start_size..cache_name_end_size])
         }
+    }
+}
+
+pub struct ConfigWriter {
+    file_handle: std::fs::File
+}
+
+impl ConfigWriter {
+    pub fn new(file: std::fs::File) -> Self {
+        Self { file_handle: file }
+    }
+
+    pub fn write_to_config(&mut self, cache: ArgCacheCollection) -> Result<(), Box<dyn std::error::Error>> {
+        let le = match LineEnding::from_current_platform() {
+            LineEnding::CR => "\r",
+            LineEnding::LF => "\n",
+            LineEnding::CRLF => "\r\n"
+        };
+        
+        let mut result = String::new();
+        for item in cache.iter() {
+            write!(&mut result, "[{}]{}", item.cache_name, le)?;
+            write!(&mut result, "file_type:{}{}", item.file_type.to_str(), le)?;
+            for arg_item in item.args.iter() {
+                write!(&mut result, "{}:{}{}", arg_item.arg, arg_item.content, le)?;
+            }
+            result.push_str(le);
+        }
+
+        self.file_handle.write(result.as_bytes())?;
+
+        Ok(())
     }
 }

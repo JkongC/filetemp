@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use crate::{program_args::CommandArg};
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash)]
@@ -16,13 +14,12 @@ impl FileType {
             Self::Unknown
         }
     }
-}
 
-impl FromStr for FileType {
-    type Err = ();
-    
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(FileType::match_type(s))
+    pub fn to_str(&self) -> &'static str {
+        match self {
+            FileType::CMake => "cmake",
+            FileType::Unknown => "unknown"
+        }
     }
 }
 
@@ -32,6 +29,10 @@ pub fn process_cmake(cmd: &CommandArg) -> Result<String, String> {
     cmake_files::process(cmd)
 }
 
-pub fn get_cmake_filename() -> &'static str {
-    cmake_files::get_filename()
+pub fn get_result_filename(ty: FileType) -> &'static str {
+    if let FileType::CMake = ty {
+        cmake_files::get_filename()
+    } else {
+        ""
+    }
 }
