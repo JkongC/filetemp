@@ -1,6 +1,6 @@
 use cache_dir::get_data_dir;
 use std::{
-    fs::{self, OpenOptions}, io, path::{Path, PathBuf}
+    fs::{self, OpenOptions}, io, path::Path
 };
 
 use crate::{
@@ -19,18 +19,9 @@ fn main() {
     define_args(&mut cmd);
 
     // Process actual arguments, check their validity.
-    match cmd.process_program_args() {
-        Err(ref e) => {
-            match e {
-                ArgProcessErr::InvalidArg(inv) => eprintln!("Invalid argument: \"{}\"", inv),
-                ArgProcessErr::InvalidFileType(invf) => eprintln!("Invalid file type: \"{}\"", invf),
-                ArgProcessErr::MissingArg(ma) => eprintln!("Missing argument: \"{}\"", ma),
-                _ => {}
-            };
-            return;
-        }
-        Ok(_) => {}
-    };
+    if let Err(e) = cmd.process_program_args() {
+        process_arg_parse_err(e);
+    }
 
     let file_type = cmd.get_file_type();
 
@@ -51,6 +42,10 @@ fn main() {
         }
     };
 
+    if let Err(e) = cmd.assert_required_args_exist() {
+        process_arg_parse_err(e);
+    };
+
     let process_result: Result<String, String> = if let FileType::CMake = file_type {
         process_cmake(&cmd)
     } else {
@@ -69,15 +64,10 @@ fn main() {
         print!("{}", result_str);
     }
 
-    let path: &str = match cmd.get_arg("path") {
-        Some(p) => p,
-        None => {
-            return;
+    if let Some(p) = cmd.get_arg("path") {
+        if let Err(_) = write_to_file(file_type, p, &result_str) {
+            eprintln!("Failed to write to file.");
         }
-    };
-
-    if let Err(_) = write_to_file(file_type, path, &result_str) {
-        eprintln!("Failed to write to file.");
     }
 
     if let Err(e) = write_arg_cache(&mut cmd, arg_cache) {
@@ -113,11 +103,17 @@ fn read_arg_cache(cmd: &mut CommandArg) -> Result<ArgCacheCollection<'static>, S
         return Ok(ArgCacheCollection::new_empty());
     };
 
-    let config_file_path: PathBuf = if let Ok(path) = get_data_dir() {
-        path.join(".filetemp").join("cache.txt")
+    let config_file_dir = if let Ok(path) = get_data_dir() {
+        path
     } else {
-        Path::new(".filetemp").join("cache.txt")
-    };
+        Path::new(".").to_path_buf()
+    }.join(".filetemp");
+
+    if let Err(_) = std::fs::create_dir_all(&config_file_dir) {
+        return Err(format!("Failed to create cache dir: \"{:?}\"", &config_file_dir));
+    }
+
+    let config_file_path = config_file_dir.join("cache.txt");
 
     let config_file: fs::File = if let Ok(f) = OpenOptions::new().read(true).open(config_file_path)
     {
@@ -149,17 +145,24 @@ fn write_arg_cache<'a>(cmd: &'a mut CommandArg, mut cache: ArgCacheCollection<'a
     } else {
         return Ok(());
     };
-
-    let config_file_path: PathBuf = if let Ok(path) = get_data_dir() {
-        path.join(".filetemp").join("cache.txt")
+    
+    let config_file_dir = if let Ok(path) = get_data_dir() {
+        path
     } else {
-        Path::new(".filetemp").join("cache.txt")
-    };
+        Path::new(".").to_path_buf()
+    }.join(".filetemp");
+
+    if let Err(_) = std::fs::create_dir_all(&config_file_dir) {
+        return Err(format!("Failed to create cache dir: \"{:?}\"", &config_file_dir));
+    }
+
+    let config_file_path = config_file_dir.join("cache.txt");
 
     let config_file: fs::File = if let Ok(f) = OpenOptions::new()
         .write(true)
+        .create(true)
         .truncate(true)
-        .open(config_file_path)
+        .open(&config_file_path)
     {
         f
     } else {
@@ -183,4 +186,13 @@ fn write_arg_cache<'a>(cmd: &'a mut CommandArg, mut cache: ArgCacheCollection<'a
     } else {
         Ok(())
     }
+}
+
+fn process_arg_parse_err(e: ArgProcessErr) {
+    match e {
+        ArgProcessErr::InvalidArg(inv) => eprintln!("Invalid argument: \"{}\"", inv),
+        ArgProcessErr::InvalidFileType(invf) => eprintln!("Invalid file type: \"{}\"", invf),
+        ArgProcessErr::MissingArg(ma) => eprintln!("Missing argument: \"{}\"", ma),
+        _ => {}
+    };
 }

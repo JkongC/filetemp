@@ -215,8 +215,16 @@ impl CommandArg {
         ty_args.chain(gn_args)
     }
 
+    /// Insert an argument item if absent.
+    /// Assumes that arg and content is correct.
     pub fn insert_arg_if_absent(&mut self, arg: &'static str, content: String) {
         self.arg_map.entry(arg).or_insert(content);
+
+        for valid_args in self.defined_args.get_mut(&self.file_type).unwrap().iter_mut().chain(self.general_args.iter_mut()) {
+            if valid_args.name == arg {
+                valid_args.found = true;
+            }
+        }
     }
 
     pub fn extract_args(&self) -> Vec<ArgPair<'_>> {
@@ -251,7 +259,7 @@ impl CommandArg {
                         arg_ref = &valid_arg.name;
                         found_arg = true;
                     } else {
-                        self.arg_map.entry(valid_arg.name).or_insert("".to_string());
+                        self.arg_map.entry(valid_arg.name).or_insert(String::from("true"));
                     }
 
                     valid_arg.found = true;
@@ -265,10 +273,10 @@ impl CommandArg {
             }
         }
 
-        self.check_if_required_args_exist()
+        Ok(())
     }
 
-    fn check_if_required_args_exist(&mut self) -> Result<(), ArgProcessErr> {
+    pub fn assert_required_args_exist(&mut self) -> Result<(), ArgProcessErr> {
         let valid_args = self.defined_args.get_mut(&self.file_type).unwrap();
         let general_args: &mut Vec<ArgGroup> = &mut self.general_args;
         let all_valid_args = valid_args.iter_mut().chain(general_args.iter_mut());

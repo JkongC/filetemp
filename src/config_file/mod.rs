@@ -1,4 +1,8 @@
-use std::{fmt::Write, io::{Read, Write as _}, ops::{Deref, DerefMut}};
+use std::{
+    fmt::Write,
+    io::{Read, Write as _},
+    ops::{Deref, DerefMut},
+};
 
 use line_ending::LineEnding;
 
@@ -9,9 +13,7 @@ static mut CACHE_STR: Option<&'static str> = None;
 /// Return the whole cache string slice.
 /// UNSAFE, always ensure CACHE_STR is already initialized.
 fn get_cache_str() -> &'static str {
-    unsafe {
-        CACHE_STR.unwrap()
-    }
+    unsafe { CACHE_STR.unwrap() }
 }
 
 pub struct ArgCache<'a> {
@@ -59,7 +61,7 @@ impl<'a> DerefMut for ArgCacheCollection<'a> {
 }
 
 pub struct ConfigReader {
-    file_handle: std::fs::File
+    file_handle: std::fs::File,
 }
 
 enum LineResult<'a> {
@@ -67,21 +69,19 @@ enum LineResult<'a> {
     FileTy(FileType),
     ArgItem(ArgPair<'a>),
     ParseError(String),
+    Discard,
 }
 
 impl ConfigReader {
     pub fn new(config_file: std::fs::File) -> Self {
         Self {
-            file_handle: config_file
+            file_handle: config_file,
         }
     }
 
-    pub fn read_from_config<'b, I>(
-        &mut self,
-        valid_args: I
-    ) -> Result<Vec<ArgCache<'b>>, String>
+    pub fn read_from_config<'b, I>(&mut self, valid_args: I) -> Result<Vec<ArgCache<'b>>, String>
     where
-        I: Iterator<Item = &'static str> + Clone
+        I: Iterator<Item = &'static str> + Clone,
     {
         let mut caches: Vec<ArgCache> = Vec::new();
 
@@ -139,6 +139,7 @@ impl ConfigReader {
                         }
                         _ => current_cache.file_type = ty,
                     },
+                    LineResult::Discard => {}
                 }
             }
         }
@@ -205,10 +206,14 @@ where
 
         for valid_arg in valid_args {
             if arg == valid_arg {
-                return LineResult::ArgItem(ArgPair {
-                    arg: valid_arg,
-                    content,
-                });
+                if arg == "save-as" || arg == "use" {
+                    return LineResult::Discard;
+                } else {
+                    return LineResult::ArgItem(ArgPair {
+                        arg: valid_arg,
+                        content,
+                    });
+                }
             }
         }
 
@@ -221,7 +226,7 @@ where
             arg, line_num
         ))
     } else {
-        let cache_name_end_size: usize = line.len() - ']'.len_utf8() + 1;
+        let cache_name_end_size: usize = line.len() - ']'.len_utf8();
 
         if line.chars().last().unwrap() != ']' {
             LineResult::ParseError(line_err!("Missing ]"))
@@ -234,7 +239,7 @@ where
 }
 
 pub struct ConfigWriter {
-    file_handle: std::fs::File
+    file_handle: std::fs::File,
 }
 
 impl ConfigWriter {
@@ -242,13 +247,16 @@ impl ConfigWriter {
         Self { file_handle: file }
     }
 
-    pub fn write_to_config(&mut self, cache: ArgCacheCollection) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn write_to_config(
+        &mut self,
+        cache: ArgCacheCollection,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let le = match LineEnding::from_current_platform() {
             LineEnding::CR => "\r",
             LineEnding::LF => "\n",
-            LineEnding::CRLF => "\r\n"
+            LineEnding::CRLF => "\r\n",
         };
-        
+
         let mut result = String::new();
         for item in cache.iter() {
             write!(&mut result, "[{}]{}", item.cache_name, le)?;
