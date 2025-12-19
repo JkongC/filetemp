@@ -41,6 +41,10 @@ GENERAL_OPTIONS:
     --show                   Show output content to stdout
 
     --path <PATH>            Path where the file is generated to
+
+    --save-as <CACHE_NAME>   Save current argument set to cache
+
+    --use <CACHE_NAME>       Use existed cache
 ";
 
 pub struct ArgPair<'a> {
