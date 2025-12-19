@@ -206,7 +206,7 @@ where
 
         for valid_arg in valid_args {
             if arg == valid_arg {
-                if arg == "save-as" || arg == "use" {
+                if arg == "save-as" || arg == "use" || arg == "show" || arg == "path" {
                     return LineResult::Discard;
                 } else {
                     return LineResult::ArgItem(ArgPair {
@@ -262,7 +262,13 @@ impl ConfigWriter {
             write!(&mut result, "[{}]{}", item.cache_name, le)?;
             write!(&mut result, "file_type:{}{}", item.file_type.to_str(), le)?;
             for arg_item in item.args.iter() {
-                write!(&mut result, "{}:{}{}", arg_item.arg, arg_item.content, le)?;
+                if arg_item.arg != "show"
+                    && arg_item.arg != "path"
+                    && arg_item.arg != "save-as"
+                    && arg_item.arg != "use"
+                {
+                    write!(&mut result, "{}:{}{}", arg_item.arg, arg_item.content, le)?;
+                }
             }
             result.push_str(le);
         }
