@@ -1,9 +1,9 @@
-use crate::{program_args::CommandArg};
+use crate::program_args::CommandArg;
 
 #[derive(Clone, Copy, Eq, PartialEq, Hash)]
 pub enum FileType {
     CMake,
-    Unknown
+    Unknown,
 }
 
 impl FileType {
@@ -18,15 +18,32 @@ impl FileType {
     pub fn to_str(&self) -> &'static str {
         match self {
             FileType::CMake => "cmake",
-            FileType::Unknown => "unknown"
+            FileType::Unknown => "unknown",
         }
     }
 }
 
 pub mod cmake_files;
 
-pub fn process_cmake(cmd: &CommandArg) -> Result<String, String> {
-    cmake_files::process(cmd)
+pub fn process_args(cmd: &CommandArg) -> Result<String, String> {
+    match cmd.get_file_type() {
+        FileType::CMake => Ok(cmake_files::process_args(cmd)),
+        FileType::Unknown => Err(String::from("Unknown file type")),
+    }
+}
+
+pub fn verify_existed_args(cmd: &CommandArg) -> Result<(), String> {
+    match cmd.get_file_type() {
+        FileType::CMake => cmake_files::verify_existed_args(cmd),
+        FileType::Unknown => Err(String::from("Unknown file type")),
+    }
+}
+
+pub fn generate_example(cmd: &CommandArg, path: &std::path::Path) -> Result<(), String> {
+    match cmd.get_file_type() {
+        FileType::CMake => cmake_files::generate_example(cmd, path),
+        FileType::Unknown => Err(String::from("Unknown file type")),
+    }
 }
 
 pub fn get_result_filename(ty: FileType) -> &'static str {

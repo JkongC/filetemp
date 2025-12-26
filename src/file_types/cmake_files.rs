@@ -2,6 +2,32 @@ use std::{fmt::Write, str::FromStr};
 
 use crate::program_args::CommandArg;
 
+const C_EXAMPLE: &'static str = "\
+#include <stdio.h>
+
+int main()
+{
+    printf(\"Hello World\");
+    return 0;
+}";
+
+const CXX_OLD_EXAMPLE: &'static str = "\
+#include <iostream>
+
+int main()
+{
+    std::cout << \"Hello World\" << std::endl;
+}";
+
+const CXX_23_EXAMPLE: &'static str = "\
+#include <print>
+
+int main()
+{
+    std::println(\"Hello World\");
+}";
+
+#[derive(PartialEq, Eq)]
 pub enum TargetType {
     Executable,
     StaticLib,
@@ -24,9 +50,10 @@ impl FromStr for TargetType {
     }
 }
 
+#[derive(PartialEq, Eq)]
 pub enum LanguageType {
     C,
-    CXX
+    CXX,
 }
 
 impl FromStr for LanguageType {
@@ -103,14 +130,29 @@ impl<'a> CMakeListsFile<'a> {
 
     pub fn output_string(&self) -> String {
         let mut out = String::new();
-        write!(&mut out, "cmake_minimum_required(VERSION {})\n\n", self.cmake_version).unwrap();
+        write!(
+            &mut out,
+            "cmake_minimum_required(VERSION {})\n\n",
+            self.cmake_version
+        )
+        .unwrap();
 
         if let Some(v) = self.c_standard {
-            write!(&mut out, "set(CMAKE_C_STANDARD {})\nset(CMAKE_C_STANDARD_REQUIRED ON)\n\n", v).unwrap();
+            write!(
+                &mut out,
+                "set(CMAKE_C_STANDARD {})\nset(CMAKE_C_STANDARD_REQUIRED ON)\n\n",
+                v
+            )
+            .unwrap();
         }
 
         if let Some(v) = self.cxx_standard {
-            write!(&mut out, "set(CMAKE_CXX_STANDARD {})\nset(CMAKE_CXX_STANDARD_REQUIRED ON)\n\n", v).unwrap();
+            write!(
+                &mut out,
+                "set(CMAKE_CXX_STANDARD {})\nset(CMAKE_CXX_STANDARD_REQUIRED ON)\n\n",
+                v
+            )
+            .unwrap();
         }
 
         write!(&mut out, "project({})\n\n", self.project_name).unwrap();
@@ -118,10 +160,10 @@ impl<'a> CMakeListsFile<'a> {
         match self.target_type {
             TargetType::Executable => {
                 write!(&mut out, "add_executable({})\n\n", self.target_name).unwrap();
-            },
+            }
             TargetType::StaticLib => {
                 write!(&mut out, "add_library({} STATIC)\n\n", self.target_name).unwrap();
-            },
+            }
             TargetType::SharedLib => {
                 write!(&mut out, "add_library({} SHARED)\n\n", self.target_name).unwrap();
             }
@@ -134,51 +176,28 @@ impl<'a> CMakeListsFile<'a> {
     }
 }
 
-pub(super) fn process(cmd: &CommandArg) -> Result<String, String> {
+pub(super) fn process_args(cmd: &CommandArg) -> String {
     let mut f: CMakeListsFile = CMakeListsFile::new();
 
     macro_rules! use_argument {
-        ($name:ident, $func:ident) => {
-            if let Some($name) = cmd.get_arg(stringify!($name)) {
-                f.$func($name);
+        ($str_name:literal, $func:ident) => {
+            if let Some(a) = cmd.get_arg($str_name) {
+                f.$func(a);
             }
         };
-        ($name:ident, $str_name:literal, $func:ident) => {
-            if let Some($name) = cmd.get_arg(stringify!($str_name)) {
-                f.$func($name);
-            }
-        }
-    }
-
-    macro_rules! use_parsed_argument {
-        ($type:ty, $name:ident, $func:ident, $err: literal) => {
-            if let Some($name) = cmd.get_arg(stringify!($name)) {
-                match $name.parse::<$type>() {
-                    Ok(result) => f.$func(result),
-                    Err(_) => {
-                        return Err(format!($err, $name));
-                    }
-                };
+        ($type:ty, $str_name:literal, $func:ident) => {
+            if let Some(a) = cmd.get_arg($str_name) {
+                f.$func(a.parse::<$type>().unwrap());
             }
         };
-        ($type:ty, $name:ident, $str_name:literal, $func:ident, $err: literal) => {
-            if let Some($name) = cmd.get_arg($str_name) {
-                match $name.parse::<$type>() {
-                    Ok(result) => f.$func(result),
-                    Err(_) => {
-                        return Err(format!($err, $name));
-                    }
-                };
-            }
-        }
     }
 
-    use_argument!(version, require_version);
-    use_argument!(proj, set_project_name);
-    use_parsed_argument!(i32, cstd, require_c_standard, "Invalid C standard: {}");
-    use_parsed_argument!(i32, cxxstd, require_cxx_standard, "Invalid C++ standard: {}");
-    use_parsed_argument!(LanguageType, ml, "main-lang", set_main_language, "Invalid main language type: {}");
-    use_parsed_argument!(TargetType, tt, "target-type", set_target_type, "Invalid target type: {}");
+    use_argument!("version", require_version);
+    use_argument!("proj", set_project_name);
+    use_argument!(i32, "cstd", require_c_standard);
+    use_argument!(i32, "cxxstd", require_cxx_standard);
+    use_argument!(LanguageType, "main-lang", set_main_language);
+    use_argument!(TargetType, "target-type", set_target_type);
 
     if let Some(tn) = cmd.get_arg("target-name") {
         f.set_target_name(tn);
@@ -186,7 +205,57 @@ pub(super) fn process(cmd: &CommandArg) -> Result<String, String> {
         f.set_target_name(cmd.get_arg("proj").unwrap());
     }
 
-    Ok(f.output_string())
+    f.output_string()
+}
+
+pub(super) fn verify_existed_args(cmd: &CommandArg) -> Result<(), String> {
+    macro_rules! assert_parse_ok {
+        ($type: ty, $arg: literal, $errfmt: literal) => {
+            if let Some(r) = cmd.get_arg($arg)
+                && r.parse::<$type>().is_err()
+            {
+                return Err(format!($errfmt, r));
+            }
+        };
+    }
+
+    assert_parse_ok!(i32, "cstd", "Invalid C standard: {}");
+    assert_parse_ok!(i32, "cxxstd", "Invalid C++ standard: {}");
+    assert_parse_ok!(LanguageType, "main-lang", "Invalid main language: {}");
+    assert_parse_ok!(TargetType, "target-type", "Invalid target type: {}");
+
+    Ok(())
+}
+
+pub(super) fn generate_example(cmd: &CommandArg, path: &std::path::Path) -> Result<(), String> {
+    let src_path = path.join("src");
+    if let Err(_) = std::fs::create_dir_all(&src_path) {
+        return Err(String::from("Failed to create source directory"));
+    }
+
+    let main_path;
+    let main_content;
+    if let LanguageType::C = cmd.get_arg_parsed_unsafe("main-lang") {
+        main_path = src_path.join("main.c");
+        main_content = C_EXAMPLE;
+    } else {
+        main_path = src_path.join("main.cpp");
+        main_content = if cmd
+            .get_arg("cxxstd")
+            .map(|s| s.parse::<i32>().unwrap() >= 23)
+            .unwrap_or(false)
+        {
+            CXX_23_EXAMPLE
+        } else {
+            CXX_OLD_EXAMPLE
+        };
+    }
+
+    if let Err(_) = std::fs::write(&main_path, main_content.as_bytes()) {
+        Err(String::from("Failed to create example main file"))
+    } else {
+        Ok(())
+    }
 }
 
 pub(super) fn get_filename() -> &'static str {

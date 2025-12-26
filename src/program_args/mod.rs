@@ -1,6 +1,8 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
+    fmt::Debug,
     ops::{Deref, DerefMut},
+    str::FromStr,
 };
 
 use crate::file_types::FileType;
@@ -54,8 +56,8 @@ pub struct ArgPair<'a> {
 
 pub enum ArgProcessErr {
     PrintedHelp,
-    InvalidArg(String),
-    InvalidFileType(String),
+    InvalidArg(&'static str),
+    InvalidFileType(&'static str),
     MissingArg(String),
 }
 
@@ -127,7 +129,7 @@ pub struct CommandArg {
     file_type: FileType,
     defined_args: HashMap<FileType, Vec<ArgGroup>>,
     general_args: Vec<ArgGroup>,
-    arg_map: HashMap<&'static str, String>,
+    arg_map: HashMap<&'static str, &'static str>,
 }
 
 pub struct ArgFileTypeView<'a> {
@@ -188,6 +190,13 @@ impl CommandArg {
         }
     }
 
+    pub fn get_arg_parsed_unsafe<T: FromStr>(&self, key: &str) -> T
+    where
+        T: FromStr<Err: Debug>,
+    {
+        self.get_arg(key).unwrap().parse::<T>().unwrap()
+    }
+
     pub fn get_flag(&self, key: &str) -> bool {
         self.arg_map.get(key).is_some()
     }
@@ -197,19 +206,19 @@ impl CommandArg {
     }
 
     pub fn process_program_args(&mut self) -> Result<(), ArgProcessErr> {
-        let mut a = collect_raw_args();
+        let a: Vec<&'static str> = collect_raw_args();
         if a.is_empty() {
             println!("{}", HELP_MESSAGE);
             return Err(ArgProcessErr::PrintedHelp);
         }
 
-        let file_type_name = a.pop_front().unwrap();
+        let file_type_name = a[0];
         match FileType::match_type(&file_type_name) {
             FileType::Unknown => return Err(ArgProcessErr::InvalidFileType(file_type_name)),
             ty @ _ => self.file_type = ty,
         };
 
-        self.process_arg_impl(a)
+        self.process_arg_impl(&a[1..])
     }
 
     pub fn query_valid_args(&mut self) -> impl Iterator<Item = &ArgGroup> + Clone {
@@ -221,10 +230,16 @@ impl CommandArg {
 
     /// Insert an argument item if absent.
     /// Assumes that arg and content is correct.
-    pub fn insert_arg_if_absent(&mut self, arg: &'static str, content: String) {
+    pub fn insert_arg_if_absent(&mut self, arg: &'static str, content: &'static str) {
         self.arg_map.entry(arg).or_insert(content);
 
-        for valid_args in self.defined_args.get_mut(&self.file_type).unwrap().iter_mut().chain(self.general_args.iter_mut()) {
+        for valid_args in self
+            .defined_args
+            .get_mut(&self.file_type)
+            .unwrap()
+            .iter_mut()
+            .chain(self.general_args.iter_mut())
+        {
             if valid_args.name == arg {
                 valid_args.found = true;
             }
@@ -240,7 +255,7 @@ impl CommandArg {
         args
     }
 
-    fn process_arg_impl(&mut self, args: VecDeque<String>) -> Result<(), ArgProcessErr> {
+    fn process_arg_impl(&mut self, args: &[&'static str]) -> Result<(), ArgProcessErr> {
         let valid_args = self.defined_args.get_mut(&self.file_type).unwrap();
         let general_args: &mut Vec<ArgGroup> = &mut self.general_args;
 
@@ -263,7 +278,7 @@ impl CommandArg {
                         arg_ref = &valid_arg.name;
                         found_arg = true;
                     } else {
-                        self.arg_map.entry(valid_arg.name).or_insert(String::from("true"));
+                        self.arg_map.entry(valid_arg.name).or_insert("true");
                     }
 
                     valid_arg.found = true;
@@ -304,8 +319,7 @@ impl CommandArg {
             }
 
             if valid_arg.has_default_value {
-                self.arg_map
-                    .insert(valid_arg.name, valid_arg.default_value.to_string());
+                self.arg_map.insert(valid_arg.name, valid_arg.default_value);
             }
         }
 
@@ -332,8 +346,8 @@ fn verify_arg(arg: &str, valid_arg: &str) -> bool {
     }
 }
 
-fn collect_raw_args() -> VecDeque<String> {
-    let mut r: VecDeque<String> = std::env::args().collect();
-    r.pop_front();
-    r
+fn collect_raw_args() -> Vec<&'static str> {
+    let mut a = std::env::args();
+    a.next();
+    a.map(|arg| &*Box::leak(arg.into_boxed_str())).collect()
 }
