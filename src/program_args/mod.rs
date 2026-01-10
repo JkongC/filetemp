@@ -47,6 +47,8 @@ GENERAL_OPTIONS:
     --save-as <CACHE_NAME>   Save current argument set to cache
 
     --use <CACHE_NAME>       Use existed cache
+
+    --gen-example       Generate example project
 ";
 
 pub struct ArgPair<'a> {
